@@ -21,7 +21,9 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.newSingleThreadContext
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import org.junit.Test
 
 /**
@@ -100,27 +102,31 @@ class ExampleUnitTest {
 	class WidgetInteractor(private val dataApi: DataApi, private val userApi: UserApi) {
 
 		fun getWidgetData(): Flow<WidgetData> {
-			return flow {
-				println("getWidgetData flow " + Thread.currentThread().name)
-				combine(
-					dataApi.getMyData().filterErrors(),
-					userApi.getMyUser().filterErrors(),
-					{ data, user -> WidgetData(user.value, data.value) }
-				)
-			}
+			println("getWidgetData flow " + Thread.currentThread().name)
+			return combine(
+				dataApi.getMyData().filterErrors(),
+				userApi.getMyUser().filterErrors(),
+				{ data, user -> WidgetData(user.value, data.value) }
+			)
 		}
-
-
 	}
 
 	data class WidgetUiState(val number: Int, val text: String) : UiState()
 
 	class WidgetUi {
-		val state: MutableStateFlow<WidgetUiState> = MutableStateFlow(WidgetUiState(0, "init"))
+		fun render(uiState: WidgetUiState) {
+			log(
+				"Screen:Widget ${uiState.number} ${uiState.text}"
+			)
+		}
 	}
 
 	class WidgetPresenter(private val ui: WidgetUi, private val widgetInteractor: WidgetInteractor) {
+		val state = WidgetUiState(0, "init")
 		suspend fun begin() {
+			withContext(newSingleThreadContext("Ui thread")) {
+				ui.render(state)
+			}
 			delay(200)
 			log("begin begin")
 			widgetInteractor
@@ -131,35 +137,28 @@ class ExampleUnitTest {
 							"\n" + widgetData.data.javaClass + " " +
 							"\n" + widgetData.user.javaClass
 					)
-					ui.state.value = uiState
+					if (uiState != state) {
+						withContext(newSingleThreadContext("Ui thread")) {
+							ui.render(uiState)
+						}
+					}
 				}
 			log("end begin")
 		}
 	}
 
 	class Screen {
-		private val widget = WidgetUi()
-		private val widgetBackend = WidgetPresenter(widget, WidgetInteractor(DataApi(), UserApi()))
+		private val widgetBackend = WidgetPresenter(WidgetUi(), WidgetInteractor(DataApi(), UserApi()))
 
 		private var widgetJob: Job? = null
-		private var widgetUiJob: Job? = null
 
 		fun start() {
-			widgetUiJob = CoroutineScope(Dispatchers.Default).launch {
-				widget.state.collect { uiState ->
-					println(
-						"Screen:Widget ${uiState.number} ${uiState.text}" +
-							"\nJobCancelled?:${widgetJob?.isCancelled}"
-					)
-				}
-			}
 			widgetJob = CoroutineScope(Dispatchers.IO).launch {
 				widgetBackend.begin()
 			}
 		}
 
 		fun stop() {
-			widgetUiJob?.cancel()
 			widgetJob?.cancel()
 		}
 	}
@@ -294,13 +293,13 @@ class ExampleUnitTest {
 		println("-----------------------")
 		println("hello " + Thread.currentThread().name)
 		val s = Screen()
-		println("start screen")
+		log("start screen")
 		s.start()
 		Thread.sleep(400)
-		println("stop screen")
+		log("stop screen")
 		s.stop()
 		Thread.sleep(400)
-		println("end")
+		log("end")
 		println("-----------------------")
 	}
 
